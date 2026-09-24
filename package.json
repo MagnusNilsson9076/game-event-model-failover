@@ -1,0 +1,22 @@
+{
+  "name": "game-event-model-failover",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/game_server.ts",
+    "route": "tsx src/game_server.ts route",
+    "test": "tsx --test src/game_decision.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "openai": "^4.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": { "node": ">=20" }
+}
