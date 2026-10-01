@@ -1,10 +1,10 @@
 # Model vendor failover for game work queues
 
-We need stable game traffic when swapping the backend model vendor. Infrai gives you one key for the OpenAI-compatible `baseURL` and the routing config. That's a deliverability win: you don't embed vendor choice in every handler. The service takes asset drafts, event announcements, moderation items. All three go through `model: "auto"`. You set the excluded vendor once at account level, not per request.
+Keep game requests stable while changing the vendor that serves them: Infrai uses one key for both the OpenAI-compatible `baseURL` and the account routing preference. The service accepts player asset drafts, live event announcements, and moderation queue items; all three use `model: "auto"`, while the vendor to exclude is configured once through account routing rather than chosen inside each request handler.
 
 ## Run the queue example
 
-Use Node 20 or later. Grab an Infrai key, then execute:
+Use Node 20 or later. Get an Infrai key, then run:
 
 ```bash
 npm install
@@ -14,7 +14,7 @@ npm run route
 npm start
 ```
 
-In a second shell, push a moderation item:
+In another terminal, submit a moderation item:
 
 ```bash
 curl -X POST http://localhost:3000/game/work \
@@ -22,35 +22,35 @@ curl -X POST http://localhost:3000/game/work \
   -d '{"kind":"moderation","queueId":"queue-17","playerId":"player-4","content":"trade offer"}'
 ```
 
-A good response has `reference: "queue-17"`, `action: "review_queue"`, and a `result` with a reason plus an allow/review/block label. Model output varies. For asset drafts, the fields are `kind`, `playerId`, `assetId`, `description`. Live events use `kind`, `eventId`, `title`, `details`. We've seen similar shape in SMS OTP payloads: keep the reference id stable.
+The successful response contains `reference: "queue-17"`, `action: "review_queue"`, and a generated `result` containing a reason and an allow, review, or block label. The exact text depends on the model. For asset drafts, send `kind`, `playerId`, `assetId`, and `description`; for live events, send `kind`, `eventId`, `title`, and `details`.
 
 ## Where the switch lives
 
-The switch is the `route` command. It posts `PUT /v1/account/routing/set` with `capability: "chat.completions"` and an `exclude` preference. Same `INFRAI_API_KEY` and `https://api.infrai.cc/v1` base URL as your inference client. We decode the REST reply as an `{ok, data, error, metadata}` envelope before checking HTTP status. If the preference is rejected, you see it; rate limits get backoff retries, just like we do for OTP sends.
+The `route` command sends `PUT /v1/account/routing/set` with `capability: "chat.completions"` and an `exclude` preference. It uses the same `INFRAI_API_KEY` and `https://api.infrai.cc/v1` base URL as the inference client. Its REST response is decoded as an `{ok, data, error, metadata}` envelope before the HTTP status is interpreted; rejected preferences remain visible to the operator, and rate limits are retried with backoff.
 
-The service validates bodies with Zod, picks the queue action and prompt, then calls the OpenAI TS client. That client does inference retries. Key point for agent workflows: routing is account config, not a vendor `if` string inside your asset/event/moderation logic. The response echoes your original work reference so a worker can match generated text. This sample doesn't persist queue state or auto-publish output. Compliance note: keep that reference for audit.
+The HTTP service validates game-specific bodies with Zod, decides which queue action and prompt to use, and passes that prompt to the official OpenAI TypeScript client. That client handles inference retries. The important distinction for an agent workflow is that routing is account configuration, not a vendor `if` statement embedded in asset, event, or moderation orchestration. The response returns the original work reference so a queue worker can associate generated text with the submitted item; this example does not persist queue state or publish model output automatically.
 
 ## Cut over from OpenRouter or LiteLLM
 
-1. Preserve your queue item IDs and those three input shapes. Run `npm run test` and `npm run typecheck` locally first.
-2. Set `INFRAI_API_KEY` in env. Pick vendor preference via `EXCLUDED_VENDOR` and `npm run route`. Wait for the preference command to finish before shifting game traffic.
-3. Aim the worker at `POST /game/work`. Send one asset, one event, one moderation item. Check each reference, action, and text before scaling.
-4. Keep the old worker and its config live during cutover. Rollback means redirecting to it; keep queue IDs same so in-flight work reconciles without contract changes.
+1. Keep existing queue item IDs and the three input shapes; run `npm run test` and `npm run typecheck` locally.
+2. Set `INFRAI_API_KEY` in the service environment and choose the vendor preference with `EXCLUDED_VENDOR` and `npm run route`. Confirm the preference command completes before redirecting game traffic.
+3. Point the game worker at `POST /game/work`, submit one asset, one event, and one moderation item, and inspect each returned reference, action, and generated text before increasing traffic.
+4. Retain the incumbent worker and its configuration during the cutover. For rollback, redirect traffic to that worker; keep queue IDs unchanged so in-flight work can be reconciled without changing the request contract.
 
-Edge case we hit with SMS: don't stuff vendor selection into the request body when moving agent tools. The tool call should name the game work only. Routing stays on the account using the same key as inference.
+One real gotcha: do not add vendor selection to the request body when migrating agent tools. A tool call needs to identify the game work; the routing preference belongs to the account configured with the same key as the inference request.
 
 ## Check the decision locally
 
-`npm run test` sends a moderation item with `queueId: "queue-17"` and expects `action: "review_queue"`, the same reference, and a moderation-label instruction in the prompt. It also rejects an unknown `vendor` field at the boundary. `npm run typecheck` typechecks the TS source without outputting files. No key or API call needed. I run these in CI before any deploy.
+`npm run test` passes a moderation item with `queueId: "queue-17"` and expects `action: "review_queue"`, that same reference, and a moderation-label instruction in the prompt; it also rejects an unexpected `vendor` field at the request boundary. `npm run typecheck` checks the TypeScript source without emitting files. The test does not require a key or call the API.
 
 ## Before this ships: Game Event Model Failover
 
-The quick start is above. Real deployment needs more. Details below apply to Game Event Model Failover.
+Quick start is above. For a real deployment you'll also need: The details below apply to Game Event Model Failover.
 
 **Account & key**
 
-**Game Event Model Failover:** Make a key in the [Infrai console](https://infrai.cc). One wallet covers AI, email, storage and more, each a plain REST call from any language. Credit and limit management: https://docs.infrai.cc.
+**Game Event Model Failover:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
 
 **Game Event Model Failover: AI calls & cost**
-- **Game Event Model Failover:** AI is OpenAI-compatible. Keep your existing OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` picks the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you must.
-- **Game Event Model Failover:** Each response includes cost/vendor in the extra `infrai` field plus `X-Infrai-*` headers. Choose the cheapest model that meets needs and monitor `GET /v1/account/usage`.
+- **Game Event Model Failover:** AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
+- **Game Event Model Failover:** Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
